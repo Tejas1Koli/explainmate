@@ -1,118 +1,130 @@
 import streamlit as st
-import requests
 import re
+import requests
+import datetime
+from functions import get_structured_explanation, log_feedback
+from notes import save_note, load_notes, delete_note
+from image_processing import extract_text_from_image
 
 # --- CONFIG ---
-st.set_page_config(page_title="ExplainMate AI", layout="centered")
+st.set_page_config(page_title="ExplainMate AI", layout="wide")
 openrouter_api_key = st.secrets["OPENROUTER_API_KEY"] if "OPENROUTER_API_KEY" in st.secrets else "your-api-key-here"
+airtable_api_key = st.secrets["AIRTABLE_API_KEY"]
+airtable_base_id = st.secrets["AIRTABLE_BASE_ID"]
+airtable_table_name = st.secrets["AIRTABLE_TABLE_NAME"]
 
-# --- UI ---
+# Sidebar for displaying saved notes
+with st.sidebar:
+    st.header("📝 Saved Notes")
+    notes = load_notes()
+    if notes:
+        for idx, note in enumerate(notes):
+            with st.expander(f"📌 {note['question'][:50]}..."):
+                st.write(f"**Date:** {note['timestamp']}")
+                st.write(note['content'])
+                if st.button("🗑️ Delete", key=f"delete_{idx}"):
+                    if delete_note(idx):
+                        st.rerun()
+    else:
+        st.info("No saved notes yet. Your notes will appear here.")
+
+# Main content area
 st.title("🧠 ExplainMate AI")
-st.subheader("Get clear, structured explanations with LaTeX rendering")
+st.subheader("Get clear, comprehensive explanations")
 
-query = st.text_input("Enter a concept or question", placeholder="e.g. What is dot product?")
+# Add image upload option
+tab1, tab2 = st.tabs(["📝 Text Input", "📷 Upload Image"])
+
+with tab1:
+    query = st.text_input("Enter a concept or question", placeholder="e.g. What is dot product?")
+
+with tab2:
+    uploaded_image = st.file_uploader("Upload handwritten notes or image", type=["png", "jpg", "jpeg"])
+    if uploaded_image:
+        try:
+            extracted_text = extract_text_from_image(uploaded_image)
+            if extracted_text:
+                query = st.text_area("Extracted text (edit if needed):", value=extracted_text)
+            else:
+                st.warning("Couldn't extract text from image. Please try another image or enter text manually.")
+        except Exception as e:
+            st.error(f"Error processing image: {str(e)}")
+
 mode = st.selectbox("Choose explanation type", ["Simple", "Technical"])
-
-#prompt style
-def generate_system_prompt(style):
-    prompt = (
-        "You are a helpful tutor who explains concepts step-by-step.\n"
-        "- Use LaTeX for all math expressions.\n"
-        "- Always wrap math content inside triple backticks like this: ```latex ... ```.\n"
-        "- Avoid using inline LaTeX like $...$ or $$...$$.\n"
-        "- Add examples with solved steps.\n"
-        "- Always use mathematical equations or expressions when user ask maths related concepts.\n"
-    )
-    if style == "Technical":
-        prompt += (
-            "- Use proper mathematical terminology, symbols, and stepwise derivation.\n"
-            "- Make sure every equation is inside a code block.\n"
-            "- Do not use plain text math like 2^2 or x_1. Always wrap it in ```latex ... ```.\n"
-        )
-    else:
-        prompt += "- Keep it beginner-friendly with simple words but use mathematical expression when needed.\n"
-    return prompt
-
-
-# --- API Call Function ---
-def get_explanation(prompt, style):
-    system_prompt = generate_system_prompt(style)
-    headers = {
-        "Authorization": f"Bearer {openrouter_api_key}",
-        "Content-Type": "application/json"
-    }
-    body = {
-        "model": "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"].strip()
-    else:
-        return f"Error: Could not generate explanation. Status: {response.status_code}. Response: {response.text}"
 
 # --- Cache Wrapper ---
 @st.cache_data(show_spinner=False)
-def cached_explanation(prompt, style):
-    return get_explanation(prompt, style)
-
-# --- Markdown Cleaner ---
-def clean_italics(text):
-    parts = re.split(r'(\$.*?\$|\$\$.*?\$\$)', text)
-    for i, part in enumerate(parts):
-        if not (part.startswith('$') and part.endswith('$')) and not (part.startswith('$$') and part.endswith('$$')):
-            part = re.sub(r'(?<!\*)\*(?!\*)', '', part)
-            part = re.sub(r'(?<!_)_(?!_)', '', part)
-            parts[i] = part
-    return ''.join(parts)
-
-# --- LaTeX Block Renderer ---
-def render_latex_blocks(text):
-    # Match code blocks with 2 or more backticks, optional spaces, and latex (case-insensitive)
-    pattern = re.compile(r'`{2,}\s*[lL][aA][tT][eE][xX]\s*([\s\S]*?)`{2,}', re.MULTILINE)
-    pos = 0
-    remaining_text = ""
-    for match in pattern.finditer(text):
-        if match.start() > pos:
-            remaining_text += text[pos:match.start()]
-        st.latex(match.group(1).strip())
-        pos = match.end()
-    if pos < len(text):
-        remaining_text += text[pos:]
-    return remaining_text
-
-# --- Inline LaTeX Renderer ---
-def render_inline_latex(text):
-    parts = re.split(r'(\$\$.*?\$\$|\$.*?\$)', text)
-    for part in parts:
-        part = part.strip()
-        if part.startswith("$$") and part.endswith("$$"):
-            st.latex(part[2:-2].strip())
-        elif part.startswith("$") and part.endswith("$"):
-            st.latex(part[1:-1].strip())
-        elif part:
-            st.markdown(part, unsafe_allow_html=True)
+def cached_explanation(prompt, style, api_key):
+    return get_structured_explanation(prompt, style, api_key)
 
 # --- Display Output ---
 if query:
-    with st.spinner("Generating explanation..."):
-        output = cached_explanation(query, mode)
-    st.markdown("### 📘 Explanation")
+    with st.spinner("Thinking..."):
+        try:
+            output = cached_explanation(query, mode, openrouter_api_key)
+            if not output:
+                st.error("Could not generate explanation. Please try again.")
+                with st.expander("Debug Information"):
+                    st.info("• API Key: ✓ Found in secrets.toml\n• Model: gryphe/mythomist-7b:free\n• Status: Failed to get response")
+            else:
+                # Process the text with inline LaTeX
+                current_text = ""
+                latex_pattern = r'```latex\s*([\s\S]*?)```'
+                last_end = 0
+                
+                for match in re.finditer(latex_pattern, output):
+                    current_text += output[last_end:match.start()].strip()
+                    if current_text:
+                        st.write(current_text)
+                        current_text = ""
+                    latex_content = match.group(1).strip()
+                    st.latex(latex_content)
+                    last_end = match.end()
+                
+                remaining_text = output[last_end:].strip()
+                if remaining_text:
+                    st.write(remaining_text)
 
-    try:
-        output = clean_italics(output)
-        clean_text = render_latex_blocks(output)
-        render_inline_latex(clean_text)
-    except Exception as e:
-        st.error("Error rendering content. Showing raw output.")
-        st.code(output)
+                # Notes section
+                st.markdown("---")
+                st.subheader("📝 Take Notes")
+                note_content = st.text_area("Your notes for this concept:", height=150)
+                if st.button("💾 Save Note"):
+                    if note_content.strip():
+                        if save_note(query, note_content):
+                            st.success("Note saved successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save note. Please try again.")
+                    else:
+                        st.warning("Please enter some content for your note.")
 
-    with st.expander("Show raw LaTeX code"):
-        st.code(output)
+                # Feedback section
+                st.markdown("---")
+                col1, col2 = st.columns(2)
+                feedback = None
+                with col1:
+                    if st.button("👍 Helpful"):
+                        feedback = "helpful"
+                with col2:
+                    if st.button("👎 Not Helpful"):
+                        feedback = "not helpful"
 
-# --- Footer ---
+                if feedback:
+                    timestamp = datetime.datetime.now().isoformat()
+                    log_feedback(
+                        airtable_api_key,
+                        airtable_base_id,
+                        airtable_table_name,
+                        query,
+                        output,
+                        feedback,
+                        timestamp
+                    )
+                    st.success("Feedback logged! Thank you.")
+
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+
 st.markdown("---")
 st.markdown("Made with ❤️ by Tejas · [GitHub](https://github.com/Tejas1Koli)")

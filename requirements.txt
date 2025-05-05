@@ -1,2 +1,8 @@
 streamlit
 requests
+pygsheets
+python-dotenv
+pyairtable
+pytesseract
+Pillow
+numpy
