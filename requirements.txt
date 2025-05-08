@@ -6,3 +6,5 @@ pyairtable
 pytesseract
 Pillow
 numpy
+fpdf2
+python-docx
