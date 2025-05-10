@@ -15,6 +15,11 @@ airtable_api_key = st.secrets["AIRTABLE_API_KEY"]
 airtable_base_id = st.secrets["AIRTABLE_BASE_ID"]
 airtable_table_name = st.secrets["AIRTABLE_TABLE_NAME"]
 
+# Force logout on new session to prevent session leakage
+if 'user' not in st.session_state:
+    from auth import logout
+    logout()
+
 # Check authentication before proceeding
 check_auth()
 
