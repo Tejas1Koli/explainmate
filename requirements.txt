@@ -8,3 +8,5 @@ Pillow
 numpy
 fpdf2
 python-docx
+supabase
+
