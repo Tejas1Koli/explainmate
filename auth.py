@@ -109,24 +109,18 @@ def logout():
             st.rerun()
 
 def check_auth():
-    """Check if user is authenticated and restore session if possible"""
+    """Always check the Supabase session for authentication, per user/browser."""
     try:
-        # Check if we have a valid session
-        if 'user' in st.session_state and st.session_state.get('user'):
-            return True
-            
-        # Try to restore session from Supabase
+        # Always check Supabase session on every request
         session = supabase.auth.get_session()
         if session and session.user:
             st.session_state['user'] = session.user
             st.session_state['session'] = session
             return True
-            
-        # If no session found, show login form
-        if "user" not in st.session_state:
+        else:
+            # No valid session, show login
             login_form()
             st.stop()
-            
     except Exception as e:
         print(f"Error checking auth: {str(e)}")
         login_form()
